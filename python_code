@@ -1,0 +1,152 @@
+#import libraries
+import numpy as np
+import math
+
+
+#calculate theta for prograde and retrograde orbits from r1, vE, r2, vA
+def func_theta_pro_and_retro(state_0, state_1):
+    
+    r1_vec = state_0[:3]
+    
+    r2_vec = state_1[:3]
+    
+    r1 = np.sqrt(sum(n**2 for n in r1_vec))
+    #print(r1, "km is r1")  
+
+    r2 = np.sqrt(sum(n**2 for n in r2_vec))
+    #print(r2, "km is r2")
+
+    h_z = np.cross(r1_vec, r2_vec)[2]
+    #print(h_z, " is the z component of r1_vec x r2_vec")
+
+    if h_z < 0:
+        theta_pro = 2*math.pi - math.acos(np.dot(r1_vec, r2_vec)/(r1*r2))
+    else:
+        theta_pro = math.acos(np.dot(r1_vec, r2_vec)/(r1*r2))
+
+    #print(theta_pro, "radians is the angle between r1 and r2 for prograde orbit")
+
+    theta_retro = 2*math.pi - theta_pro
+    #print(theta_retro, "radians is the angle between r1 and r2 for retrograde orbit")
+    
+    return (theta_pro, theta_retro, r1, r2)
+
+
+#check if the transfer is possible in the given time of flight
+def func_transfer_possible_check(theta, r1, r2, mu, tof):
+    
+    c = np.sqrt(r1**2 + r2**2 - 2*r1*r2*math.cos(theta))
+    #print(c, "km is the c chord length")
+
+    s = (r1 + r2 + c)/2
+    #print (s, "km is the s semiperimeter of space triangle")
+
+    a_min = s/2
+    #print(a_min, "km is the a_min")
+
+    beta_min = 2*math.asin(np.sqrt(1-c/s))
+    
+    alpha_min = math.pi
+
+    t_min = (np.sqrt(a_min**3/mu))*(math.pi - beta_min + math.sin(beta_min))
+    #print(t_min, "sec is the t_min, as compared to ", tof, "sec the actual time of flight")
+
+    tp = (1/3)*np.sqrt(2/mu)*(s**(3/2) - np.sign(math.sin(theta))*(s-c)**(3/2))
+    #print(tp, "sec is the minimum possible time of flight")
+
+    return tof>tp
+    #print("is transfer possible ?", tof > tp)
+    #print("is tof < t_min ?", tof<t_min)
+
+
+
+#define Stumpff functions to calculate C and S
+def func_C(z):
+    if z>0:
+        c = (1-math.cos(np.sqrt(z)))/z
+    elif z < 0 : 
+        c = (math.cosh(np.sqrt(-z)) - 1)/(-z)
+    else: 
+        c = 1/2
+    return c
+
+def func_S(z):
+    if z>0: 
+        s = (np.sqrt(z) - math.sin(np.sqrt(z)))/ (np.sqrt(z))**3
+    elif z<0 : 
+        s = (math.sinh(np.sqrt(-z)) - np.sqrt(-z))/ (np.sqrt(-z))**3
+    else: 
+        s = 1/6
+    return s
+
+
+#sub-functions required in the Lambert solver to get variables A, y, fz required in Vallado's method
+def func_A(r1, r2, theta):
+    return math.sin(theta)*np.sqrt((r1*r2)/(1-math.cos(theta)))
+
+def func_y(r1, r2, theta, zi):
+    A = func_A(r1, r2, theta)
+    S = func_S(zi)
+    C = func_C(zi)
+    return r1 + r2 + A*(zi*S-1)/np.sqrt(C)
+
+def func_fz(z,r1, r2, theta, tof, mu):
+    S = func_S(z)
+    C = func_C(z)
+    y = func_y(r1, r2, theta, z)
+    A = func_A(r1, r2, theta)
+    return S*(y/C)**(3/2) + A*np.sqrt(y) - tof*np.sqrt(mu)
+    
+
+#Lambert solver to get terminal velocities at departure and arrival, using Vallado's method
+def func_Lambert_vdep_varr_Vallado(state_0, state_1, theta, tol, tof, mu):
+    
+    r1_vec = np.array(state_0[0:3])
+    #print(r1_vec)
+    
+    r2_vec = np.array(state_1[0:3])
+    #print(r2_vec)
+    
+    r1 = np.sqrt(sum(n**2 for n in r1_vec))
+    #print(r1)
+
+    r2 = np.sqrt(sum(n**2 for n in r2_vec))
+    #print(r2)
+    
+    A = np.sqrt(r1*r2*(1+math.cos(theta)))
+    #print(A)
+    
+    z_hi = 4*math.pi**2
+    z_lo = -4*math.pi
+    n = 0
+    
+    while (z_hi-z_lo > tol) and (n <= 100):
+        n+=1
+        zi = (z_hi + z_lo)/2
+        C = func_C(zi)
+        S = func_S(zi)
+        y = r1 + r2 + A*(zi*S-1)/np.sqrt(C) 
+        #print(y)
+        f = S*(y/C)**(3/2) + A*np.sqrt(y) - tof*np.sqrt(mu)
+        #print(f)
+        if f < 0 :
+            z_lo = zi
+        else :
+            z_hi = zi
+    
+    z = zi
+    C = func_C(z)
+    S = func_S(z)
+    y = r1 + r2 + A*(z*S-1)/np.sqrt(C) 
+
+    f = 1 - y/r1
+    g = A*np.sqrt(y/mu)
+    g_dot = 1 - y/r2
+    #f_dot = (f*g_dot-1)/g
+    
+    v_dep_vec = (1/g)*(r2_vec-f*r1_vec)
+    v_arr_vec = (1/g)*(g_dot*r2_vec - r1_vec)
+    
+    return [v_dep_vec, v_arr_vec]
+
+
